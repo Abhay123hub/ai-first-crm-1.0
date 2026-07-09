@@ -79,6 +79,14 @@ def agent_node(state: AgentState) -> dict:
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     now   = datetime.datetime.now().strftime("%H:%M")
 
+    # Check if last message is a ToolMessage - if so, just respond with confirmation
+    last_msg = state["messages"][-1] if state["messages"] else None
+    if last_msg and isinstance(last_msg, ToolMessage):
+        # Tool was just executed, return a friendly confirmation
+        tool_result = last_msg.content
+        confirmation = f"I've processed your request. {tool_result}"
+        return {"messages": [AIMessage(content=confirmation)], "form_data": state["form_data"]}
+
     system_msg = SystemMessage(content=f"""You are an AI CRM assistant for pharmaceutical sales reps.
 The rep CANNOT edit the form manually - you control it entirely through tools.
 
