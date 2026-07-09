@@ -154,12 +154,15 @@ export default function App() {
                   value={formData.interaction_type || 'Meeting'}
                   disabled
                 >
-                  <option>Meeting</option>
-                  <option>Call</option>
-                  <option>Email</option>
-                  <option>Presentation</option>
-                  <option>Conference</option>
+                  <option value="Meeting">Meeting</option>
+                  <option value="Call">Call</option>
+                  <option value="Email">Email</option>
+                  <option value="Presentation">Presentation</option>
+                  <option value="Conference">Conference</option>
                 </select>
+                {formData.interaction_type && (
+                  <span className="field-hint">AI-determined type</span>
+                )}
               </div>
             </div>
 

@@ -145,8 +145,16 @@ def action_node(state: AgentState) -> dict:
                 text = args.get("text", "")
                 llm  = get_llm()
                 prompt = f"""Extract interaction details from these sales notes and return ONLY valid JSON.
+
+CRITICAL: For interaction_type, you MUST determine the correct type based on keywords:
+- If words like "met", "meeting", "visited", "in-person" => "Meeting"
+- If words like "called", "phone", "call", "telephonic" => "Call"
+- If words like "emailed", "email", "sent mail" => "Email"
+- If words like "presented", "presentation", "demo" => "Presentation"
+- If words like "conference", "seminar", "webinar" => "Conference"
+
 Required fields (use null if not found):
-  hcp_name, interaction_type (Meeting/Call/Email/Presentation/Conference),
+  hcp_name, interaction_type (MUST be one of: Meeting/Call/Email/Presentation/Conference),
   date (YYYY-MM-DD, today={today}), time (HH:MM 24hr),
   attendees, topics_discussed, sentiment (Positive/Neutral/Negative),
   outcomes, follow_up_actions
@@ -167,9 +175,29 @@ Return ONLY the JSON object, no markdown, no explanation."""
                 filled = []
                 valid_fields = {"hcp_name","interaction_type","date","time","attendees",
                                "topics_discussed","sentiment","outcomes","follow_up_actions"}
+                valid_interaction_types = {"Meeting", "Call", "Email", "Presentation", "Conference"}
                 for k, v in extracted.items():
                     if k in valid_fields and v not in (None, "", [], {}):
-                        form[k] = v
+                        # Validate interaction_type
+                        if k == "interaction_type":
+                            # Normalize: capitalize first letter, handle common variations
+                            v_normalized = v.strip().capitalize()
+                            if v_normalized in valid_interaction_types:
+                                form[k] = v_normalized
+                            elif v.lower() in ["meeting", "met", "visited"]:
+                                form[k] = "Meeting"
+                            elif v.lower() in ["call", "phone", "called", "telephonic"]:
+                                form[k] = "Call"
+                            elif v.lower() in ["email", "emailed", "mail"]:
+                                form[k] = "Email"
+                            elif v.lower() in ["presentation", "presented", "demo"]:
+                                form[k] = "Presentation"
+                            elif v.lower() in ["conference", "seminar", "webinar"]:
+                                form[k] = "Conference"
+                            else:
+                                form[k] = "Meeting"  # default
+                        else:
+                            form[k] = v
                         filled.append(k)
                 result = f"Logged interaction. Fields populated: {', '.join(filled) or 'none'}."
 
@@ -180,8 +208,41 @@ Return ONLY the JSON object, no markdown, no explanation."""
                 valid = {"hcp_name","interaction_type","date","time","attendees",
                          "topics_discussed","sentiment","outcomes","follow_up_actions"}
                 if field in valid:
-                    form[field] = value
-                    result = f"Updated {field} -> {value!r}."
+                    # Validate interaction_type
+                    if field == "interaction_type":
+                        valid_interaction_types = {"Meeting", "Call", "Email", "Presentation", "Conference"}
+                        v_normalized = value.strip().capitalize()
+                        if v_normalized in valid_interaction_types:
+                            form[field] = v_normalized
+                        elif value.lower() in ["meeting", "met", "visited"]:
+                            form[field] = "Meeting"
+                        elif value.lower() in ["call", "phone", "called", "telephonic"]:
+                            form[field] = "Call"
+                        elif value.lower() in ["email", "emailed", "mail"]:
+                            form[field] = "Email"
+                        elif value.lower() in ["presentation", "presented", "demo"]:
+                            form[field] = "Presentation"
+                        elif value.lower() in ["conference", "seminar", "webinar"]:
+                            form[field] = "Conference"
+                        else:
+                            form[field] = value  # Use as-is if not recognized
+                    # Validate sentiment
+                    elif field == "sentiment":
+                        valid_sentiments = {"Positive", "Neutral", "Negative"}
+                        v_normalized = value.strip().capitalize()
+                        if v_normalized in valid_sentiments:
+                            form[field] = v_normalized
+                        elif value.lower() in ["positive", "good", "happy"]:
+                            form[field] = "Positive"
+                        elif value.lower() in ["neutral", "okay", "ok"]:
+                            form[field] = "Neutral"
+                        elif value.lower() in ["negative", "bad", "unhappy"]:
+                            form[field] = "Negative"
+                        else:
+                            form[field] = value
+                    else:
+                        form[field] = value
+                    result = f"Updated {field} -> {form[field]!r}."
                 else:
                     result = f"Unknown field: {field!r}."
 
