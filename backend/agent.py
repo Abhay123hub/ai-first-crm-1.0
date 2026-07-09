@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import re
 import json
 import datetime
 from typing import TypedDict, List, Optional, Annotated
@@ -43,83 +44,98 @@ def get_llm() -> ChatGroq:
     return ChatGroq(api_key=api_key or None, model=model, temperature=0)
 
 
-# ============================================================================
-#  TOOL DEFINITIONS  (kept minimal for reliable tool calling)
-# ============================================================================
+# --- Tool Descriptions ---
+TOOL_DESCRIPTIONS = """
+You have access to the following tools:
 
-@tool
-def log_interaction(text: str) -> str:
-    """Log a new HCP interaction. Pass the user's raw notes as 'text'."""
-    return f"[log_interaction] text={text!r}"
+1. log_interaction - Log a new HCP interaction from user notes
+   Usage: {"tool": "log_interaction", "args": {"text": "user notes here"}}
 
+2. edit_interaction - Update a single field in the form
+   Usage: {"tool": "edit_interaction", "args": {"field": "field_name", "value": "new value"}}
+   Valid fields: hcp_name, interaction_type, date, time, attendees, topics_discussed, sentiment, outcomes, follow_up_actions
 
-@tool
-def edit_interaction(field: str, value: str) -> str:
-    """Update a single field in the interaction form.
-    field must be one of: hcp_name, interaction_type, date, time, attendees,
-    topics_discussed, sentiment, outcomes, follow_up_actions.
-    For sentiment, value must be exactly: Positive, Neutral, or Negative.
-    Call this once per field that needs updating."""
-    return f"[edit_interaction] {field}={value!r}"
+3. add_material - Add a material shared with HCP
+   Usage: {"tool": "add_material", "args": {"name": "material name"}}
 
+4. add_sample - Add a sample distributed to HCP
+   Usage: {"tool": "add_sample", "args": {"name": "sample name"}}
 
-@tool
-def add_material(name: str) -> str:
-    """Add a promotional material or brochure that was shared with the HCP."""
-    return f"[add_material] name={name!r}"
+5. suggest_follow_ups - Generate follow-up suggestions
+   Usage: {"tool": "suggest_follow_ups", "args": {}}
 
-
-@tool
-def add_sample(name: str) -> str:
-    """Add a drug sample that was distributed to the HCP."""
-    return f"[add_sample] name={name!r}"
-
-
-@tool
-def suggest_follow_ups() -> str:
-    """Generate AI-powered follow-up action suggestions based on the current interaction."""
-    return "[suggest_follow_ups]"
-
-
-@tool
-def save_interaction_to_db() -> str:
-    """Validate and save the completed interaction form to the database."""
-    return "[save_interaction_to_db]"
-
-
-TOOLS = [log_interaction, edit_interaction, add_material, add_sample, suggest_follow_ups, save_interaction_to_db]
+6. save_interaction_to_db - Save the interaction to database
+   Usage: {"tool": "save_interaction_to_db", "args": {}}
+"""
 
 
 # ============================================================================
-#  AGENT NODE
+#  AGENT NODE (Prompt-based tool calling)
 # ============================================================================
 
 def agent_node(state: AgentState) -> dict:
-    llm = get_llm().bind_tools(TOOLS)
+    llm = get_llm()
 
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     now   = datetime.datetime.now().strftime("%H:%M")
 
-    system_msg = SystemMessage(content=f"""You are an AI CRM assistant for pharmaceutical sales reps. 
-The rep CANNOT edit the form manually — you control it entirely through tools.
+    system_msg = SystemMessage(content=f"""You are an AI CRM assistant for pharmaceutical sales reps.
+The rep CANNOT edit the form manually - you control it entirely through tools.
 
 Current form state:
 {json.dumps(state["form_data"], indent=2)}
 
 Today: {today}  Now: {now}
+{TOOL_DESCRIPTIONS}
 
-Based on user input, choose the appropriate tool:
-- If the user describes a new interaction (e.g., meeting notes, phone call notes), you MUST use `log_interaction` to process the notes. Do NOT use `edit_interaction` multiple times to populate a new form.
-- If the user corrects or edits a specific field in the current form, use `edit_interaction`.
-- If the user mentions materials shared, use `add_material`.
-- If the user mentions samples distributed, use `add_sample`.
-- If the user asks for follow-up suggestions, use `suggest_follow_ups`.
-- If the user says they are done or to save/log the interaction, use `save_interaction_to_db`.
+RULES:
+- If the user describes a new interaction, use log_interaction
+- If the user corrects a field, use edit_interaction
+- If the user mentions materials, use add_material
+- If the user mentions samples, use add_sample
+- If the user asks for suggestions, use suggest_follow_ups
+- If the user says save/done, use save_interaction_to_db
 
-Always confirm what actions were taken in a friendly message. Do not call multiple conflicting tools at once.
+To use a tool, respond with EXACTLY this JSON format (no other text):
+{{"tool": "tool_name", "args": {{...}}}}
+
+If no tool is needed, respond with a friendly message only (no JSON).
 """)
 
     response = llm.invoke([system_msg] + state["messages"])
+    content = response.content.strip()
+
+    # Check if response contains a tool call (JSON format)
+    tool_call = None
+    try:
+        # Try to extract JSON from response
+        json_match = re.search(r'\{[^{}]*"tool"[^{}]*\}', content)
+        if json_match:
+            tool_call = json.loads(json_match.group())
+    except:
+        pass
+
+    if tool_call and "tool" in tool_call:
+        # Create a tool call message
+        tool_name = tool_call["tool"]
+        tool_args = tool_call.get("args", {})
+
+        # Validate tool name
+        valid_tools = ["log_interaction", "edit_interaction", "add_material", 
+                       "add_sample", "suggest_follow_ups", "save_interaction_to_db"]
+        if tool_name in valid_tools:
+            # Create an AIMessage with tool_calls
+            ai_msg = AIMessage(
+                content="",
+                tool_calls=[{
+                    "id": f"call_{datetime.datetime.now().strftime('%H%M%S')}",
+                    "name": tool_name,
+                    "args": tool_args
+                }]
+            )
+            return {"messages": [ai_msg]}
+
+    # No tool call, just a regular response
     return {"messages": [response]}
 
 
@@ -131,6 +147,7 @@ def action_node(state: AgentState) -> dict:
     last  = state["messages"][-1]
     form  = dict(state["form_data"])
     today = datetime.datetime.now().strftime("%Y-%m-%d")
+    now   = datetime.datetime.now().strftime("%H:%M")
     tool_messages: List[ToolMessage] = []
 
     for call in last.tool_calls:
@@ -191,7 +208,6 @@ Return ONLY the JSON object, no markdown, no explanation."""
                     if k in valid_fields and v not in (None, "", [], {}):
                         # Validate interaction_type
                         if k == "interaction_type":
-                            # Normalize: capitalize first letter, handle common variations
                             v_normalized = v.strip().capitalize()
                             if v_normalized in valid_interaction_types:
                                 form[k] = v_normalized
@@ -206,24 +222,19 @@ Return ONLY the JSON object, no markdown, no explanation."""
                             elif v.lower() in ["conference", "seminar", "webinar"]:
                                 form[k] = "Conference"
                             else:
-                                form[k] = "Meeting"  # default
+                                form[k] = "Meeting"
                         # Validate and normalize time
                         elif k == "time":
-                            import re
                             time_str = str(v).strip()
-                            # Try to parse various time formats
-                            # Remove spaces
                             time_str = time_str.replace(" ", "")
-                            # Try HH:MM format
                             match = re.match(r'^(\d{1,2}):(\d{2})$', time_str)
                             if match:
                                 hour, minute = int(match.group(1)), int(match.group(2))
                                 if 0 <= hour <= 23 and 0 <= minute <= 59:
                                     form[k] = f"{hour:02d}:{minute:02d}"
                                 else:
-                                    form[k] = now  # default to current time
+                                    form[k] = now
                             else:
-                                # Try to extract time from string like "10am", "2pm", "10:30am"
                                 match = re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$', time_str.lower())
                                 if match:
                                     hour = int(match.group(1))
@@ -238,7 +249,6 @@ Return ONLY the JSON object, no markdown, no explanation."""
                                     else:
                                         form[k] = now
                                 else:
-                                    # Try to extract from natural language
                                     time_lower = time_str.lower()
                                     if "morning" in time_lower:
                                         form[k] = "09:00"
@@ -249,7 +259,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
                                     elif "night" in time_lower:
                                         form[k] = "20:00"
                                     else:
-                                        form[k] = now  # default to current time
+                                        form[k] = now
                         else:
                             form[k] = v
                         filled.append(k)
@@ -262,7 +272,6 @@ Return ONLY the JSON object, no markdown, no explanation."""
                 valid = {"hcp_name","interaction_type","date","time","attendees",
                          "topics_discussed","sentiment","outcomes","follow_up_actions"}
                 if field in valid:
-                    # Validate interaction_type
                     if field == "interaction_type":
                         valid_interaction_types = {"Meeting", "Call", "Email", "Presentation", "Conference"}
                         v_normalized = value.strip().capitalize()
@@ -279,8 +288,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
                         elif value.lower() in ["conference", "seminar", "webinar"]:
                             form[field] = "Conference"
                         else:
-                            form[field] = value  # Use as-is if not recognized
-                    # Validate sentiment
+                            form[field] = value
                     elif field == "sentiment":
                         valid_sentiments = {"Positive", "Neutral", "Negative"}
                         v_normalized = value.strip().capitalize()
