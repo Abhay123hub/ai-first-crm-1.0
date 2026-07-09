@@ -108,10 +108,25 @@ If no tool is needed, respond with a friendly message only (no JSON).
     # Check if response contains a tool call (JSON format)
     tool_call = None
     try:
-        # Try to extract JSON from response
-        json_match = re.search(r'\{[^{}]*"tool"[^{}]*\}', content)
-        if json_match:
-            tool_call = json.loads(json_match.group())
+        # Try to extract JSON from response - handle nested objects
+        # Find the first { and match the closing }
+        start_idx = content.find('{')
+        if start_idx != -1:
+            depth = 0
+            for i in range(start_idx, len(content)):
+                if content[i] == '{':
+                    depth += 1
+                elif content[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        json_str = content[start_idx:i+1]
+                        try:
+                            parsed = json.loads(json_str)
+                            if "tool" in parsed:
+                                tool_call = parsed
+                        except:
+                            pass
+                        break
     except:
         pass
 

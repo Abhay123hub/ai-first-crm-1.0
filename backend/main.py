@@ -118,6 +118,9 @@ async def chat_endpoint(req: ChatRequest):
             )
         )
 
+    # Debug: print form_data
+    print(f"DEBUG: form_data being returned: {result.get('form_data', {})}")
+
     return ChatResponse(messages=out_msgs, form_data=result["form_data"])
 
 
