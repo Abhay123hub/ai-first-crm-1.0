@@ -146,18 +146,29 @@ def action_node(state: AgentState) -> dict:
                 llm  = get_llm()
                 prompt = f"""Extract interaction details from these sales notes and return ONLY valid JSON.
 
-CRITICAL: For interaction_type, you MUST determine the correct type based on keywords:
-- If words like "met", "meeting", "visited", "in-person" => "Meeting"
-- If words like "called", "phone", "call", "telephonic" => "Call"
-- If words like "emailed", "email", "sent mail" => "Email"
-- If words like "presented", "presentation", "demo" => "Presentation"
-- If words like "conference", "seminar", "webinar" => "Conference"
+CRITICAL RULES:
+1. For interaction_type, determine based on keywords:
+   - "met", "meeting", "visited", "in-person" => "Meeting"
+   - "called", "phone", "call", "telephonic" => "Call"
+   - "emailed", "email", "sent mail" => "Email"
+   - "presented", "presentation", "demo" => "Presentation"
+   - "conference", "seminar", "webinar" => "Conference"
 
-Required fields (use null if not found):
-  hcp_name, interaction_type (MUST be one of: Meeting/Call/Email/Presentation/Conference),
-  date (YYYY-MM-DD, today={today}), time (HH:MM 24hr),
-  attendees, topics_discussed, sentiment (Positive/Neutral/Negative),
-  outcomes, follow_up_actions
+2. For time, extract the EXACT time mentioned. Examples:
+   - "10:00 AM" => "10:00"
+   - "2:30 PM" => "14:30"
+   - "morning" => "09:00"
+   - "afternoon" => "14:00"
+   - "evening" => "18:00"
+   - "2pm" => "14:00"
+   - "10am" => "10:00"
+   If no time mentioned, use current time: {now}
+
+3. For date, use today's date if not specified: {today}
+
+Required fields:
+  hcp_name, interaction_type, date (YYYY-MM-DD), time (HH:MM 24hr format),
+  attendees, topics_discussed, sentiment, outcomes, follow_up_actions
 
 Notes: {text}
 
@@ -196,6 +207,49 @@ Return ONLY the JSON object, no markdown, no explanation."""
                                 form[k] = "Conference"
                             else:
                                 form[k] = "Meeting"  # default
+                        # Validate and normalize time
+                        elif k == "time":
+                            import re
+                            time_str = str(v).strip()
+                            # Try to parse various time formats
+                            # Remove spaces
+                            time_str = time_str.replace(" ", "")
+                            # Try HH:MM format
+                            match = re.match(r'^(\d{1,2}):(\d{2})$', time_str)
+                            if match:
+                                hour, minute = int(match.group(1)), int(match.group(2))
+                                if 0 <= hour <= 23 and 0 <= minute <= 59:
+                                    form[k] = f"{hour:02d}:{minute:02d}"
+                                else:
+                                    form[k] = now  # default to current time
+                            else:
+                                # Try to extract time from string like "10am", "2pm", "10:30am"
+                                match = re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$', time_str.lower())
+                                if match:
+                                    hour = int(match.group(1))
+                                    minute = int(match.group(2)) if match.group(2) else 0
+                                    ampm = match.group(3)
+                                    if ampm == 'pm' and hour < 12:
+                                        hour += 12
+                                    elif ampm == 'am' and hour == 12:
+                                        hour = 0
+                                    if 0 <= hour <= 23 and 0 <= minute <= 59:
+                                        form[k] = f"{hour:02d}:{minute:02d}"
+                                    else:
+                                        form[k] = now
+                                else:
+                                    # Try to extract from natural language
+                                    time_lower = time_str.lower()
+                                    if "morning" in time_lower:
+                                        form[k] = "09:00"
+                                    elif "afternoon" in time_lower:
+                                        form[k] = "14:00"
+                                    elif "evening" in time_lower:
+                                        form[k] = "18:00"
+                                    elif "night" in time_lower:
+                                        form[k] = "20:00"
+                                    else:
+                                        form[k] = now  # default to current time
                         else:
                             form[k] = v
                         filled.append(k)
