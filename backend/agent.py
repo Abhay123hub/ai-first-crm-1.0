@@ -133,10 +133,10 @@ If no tool is needed, respond with a friendly message only (no JSON).
                     "args": tool_args
                 }]
             )
-            return {"messages": [ai_msg]}
+            return {"messages": [ai_msg], "form_data": state["form_data"]}
 
     # No tool call, just a regular response
-    return {"messages": [response]}
+    return {"messages": [response], "form_data": state["form_data"]}
 
 
 # ============================================================================
